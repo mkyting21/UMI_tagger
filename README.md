@@ -17,4 +17,9 @@ ANAACGGGGTTGTGGGAGAGC <br />
 A#EEEAAEEE/EEEEAEEEEE<br />
 
 
+
+
+
+
+
 UMI-tools can then read this barcode as **GGACTAAC**

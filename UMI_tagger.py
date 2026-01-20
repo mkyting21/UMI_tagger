@@ -1,98 +1,71 @@
-#!/usr/bin/python
-#USAGE: ./UMI_tagger.py [file_name]
-#[file_name] can be ".fastq" or ".fastq.gz" format, but the output will be .fastq
-####################################################################################################################################################
-#Author: Michael Ting
-#edited 2021-11-1
-#Description: This python script will process dual UMIs generated from the "NEXTflex small RNA-seq V3 kit", and prepare fastq files for UMI-Tools (https://github.com/CGATOxford/UMI-tools)
-	#It works by trimming the first four & last four nucleotides and tagging them to the read name
+"""
+Author: Michael Ting
+Date: 2026-1-17
+Notes: UMI_tagger clips 5p and 3p UMIs, and tags them to the read ID
+"""
 
-####################################################################################################################################################
-#e.g. the fastq read becomes:
-	#@NS500442:115:H77H7BGX7:1:11101:24207:1052 1:N:0:ATCACG
-	#GGACANAACGGGGTTGTGGGAGAGCTAAC
-	#+
-	#AAAAA#EEEAAEEE/EEEEAEEEEEEEEE
-
-	#@NS500442:115:H77H7BGX7:1:11101:24207:1052_GGACTAAC 1:N:0:ATCACG
-	#ANAACGGGGTTGTGGGAGAGC
-	#+
-	#A#EEEAAEEE/EEEEAEEEEE
-
-#umi_tools can then read this barcode as GGACTAAC
-####################################################################################################################################################
-
-#used for calculatingprocessing time
-import time
-start = time.time()
 import sys
-#use of regular expressions
-import re
-#reading gzipped files so I don't have to unzip fastq files
 import gzip
+import re
+import argparse
+from tqdm import tqdm
+from pathlib import Path 
+from Bio.SeqIO.QualityIO import FastqGeneralIterator
 
-#define general function for trimming umi and adding it to the 'fastq header'
-def process_umi():
-	#fastq files have 4 lines. The script will act differently according to which line it is.
-	readname_count = 1
-	sequence_count = 2
-	optional_count = 3
-	quality_count = 4
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description = "UMI_tagger: Tags Unique Molecular Identifiers (UMI) to fastq read name (Required setup for UMI_tools)")
+    parser.add_argument("file", type=str, help = "fastq file") #positional arg
+    parser.add_argument("-5p", "--umi_length_5p", metavar= "Length", type=int, help="nt length of 5prime UMI. Can be used with -3p", default = 0)
+    parser.add_argument("-3p", "--umi_length_3p", metavar = "Length", type=int, help="nt length of 3prime UMI. Can be used with -5p", default = 0)
+    parsed_args = parser.parse_args()
 
-	for linenumber, line in enumerate(handle, start = 1):
-		#fastq line#1: Storing the header as variable for manipulation
-		if linenumber == readname_count:
-			temp_readname = line.strip()
-			#e.g. pattern im trying to capture -> @NS500442:115:H77H7BGX7:1:11101:24207:1052 1:N:0:ATCACG
-			match = re.search(r'(@[\w:]*)(\s[\w:]*)', temp_readname)
-			if match:
-				header_start = match.group(1)
-				header_end = match.group(2)
-			readname_count += 4
-		#fastq line#2: Storing the sequence as variable for manipulation
-		elif linenumber == sequence_count:
-			temp_sequence = line.strip()
-			#use regular expressions to capture UMI on the 5' end of sequence
-			FiveprimeUMI = re.search(r'^[ATCGN]{4}', line)
-			if FiveprimeUMI:
-				umi1 = FiveprimeUMI.group()
-			ThreeprimeUMI = re.search(r'[ATCGN]{4}$', line)
-			if ThreeprimeUMI:
-				umi2 = ThreeprimeUMI.group()
-			#add the 2 umi's to the temporary 'header', then write the trimmed sequence
-			newfile.write(header_start + '_' + umi1 + umi2 + header_end + "\n")
-			newfile.write(temp_sequence[4:-4] + "\n")
-			sequence_count += 4
-		#fastq line#3: optional line
-		elif linenumber == optional_count:
-			newfile.write(line.strip() + "\n")
-			optional_count += 4
-		#fastq line#4: Storing quality score as variable-> also trimming quality scores to match trimmed sequence
-		elif linenumber == quality_count:
-			newfile.write(line.strip()[4:-4] + "\n")
-			quality_count += 4
+#extract variables from args
+umi_length_5p=parsed_args.umi_length_5p
+umi_length_3p=parsed_args.umi_length_3p
+input_file=parsed_args.file
 
-#sys.argv allows you to store input from STDIN as a variable
-file_name=sys.argv[1]
+#Exit if no UMIs were entered
+if umi_length_5p + umi_length_3p == 0:
+    sys.exit("ERROR: No UMI info was entered. Please enter value(s) for '-5p' and/or '-3p'")
 
-#choose if the file is gzipped or unzipped
-match0 = re.search(r'\.gz', file_name)
-if match0:
-	#Create "newfile" to append the umi sequences. To make the name cleaner, trim the ".gz" from the file_name
-	newfile = open("umi_%s" %file_name[:-3], "a+")
-	#read the gzipped fastq file and process it according to the function "process_umi"
-	with gzip.open(file_name, 'rb') as handle:
-		process_umi()
-else:
-	#Create "newfile" to append the umi sequences.
-	newfile = open("umi_%s" %file_name, "a+")
-	#read the fastq file and process it according to the function "process_umi"
-	with open(file_name, 'r') as handle:
-		process_umi()
-			
-end = time.time()
-newfile.close()
+#set variables for slicing the sequences. If no 3p umi was selected, set to "None" 
+start = umi_length_5p
+end = -umi_length_3p if umi_length_3p > 0 else None
 
-#keeps a record of processing time in seconds
-print "processing time"
-print(end - start)
+#Function for handling file if it is .gz
+def modified_open(filename, mode='rt'):
+    if filename.endswith('.gz'):
+        return gzip.open(filename, mode)
+    else:
+        return open(filename, mode)
+
+#Name output file
+output_file = re.sub(r'\.fastq.*', r'_UMI.fastq', input_file)
+print(f"Converting {input_file} to {output_file}")
+fastq_counter=0 #record number of fastq entries
+
+with modified_open(input_file) as in_handle:
+    with open(output_file, "w") as out_handle: 
+        for header, seq, quality in tqdm( FastqGeneralIterator(in_handle),  desc="Processing" ):
+            #identify umi sequences    
+            umi_5p=seq[:umi_length_5p]             
+            umi_3p=seq[-umi_length_3p:] if umi_length_3p > 0 else ""
+            umi_full=umi_5p + umi_3p       
+
+            #trim UMIs from sequence
+            new_seq=seq[start:end]            
+
+            #add umi to header
+            temp_header=header.split(" ")
+            temp_header[0]=f"{temp_header[0]}_{umi_full}"
+            new_header=" ".join(temp_header)
+
+            #trim the quality scores
+            new_quality=quality[start:end]
+    
+            #save the modified fastq entry
+            out_handle.write("@%s\n%s\n+\n%s\n" % (new_header, new_seq, new_quality) )
+            fastq_counter += 1 
+
+print(f"Total fastq entries: {fastq_counter}")
+
